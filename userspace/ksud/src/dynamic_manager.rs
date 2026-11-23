@@ -101,11 +101,13 @@ impl Sign {
 /// Parse a certificate size, accepting decimal or `0x`-prefixed hex.
 fn parse_size(value: &str) -> Result<u32> {
     let value = value.trim();
-    value
+    let size = value
         .strip_prefix("0x")
         .or_else(|| value.strip_prefix("0X"))
         .map_or_else(|| value.parse::<u32>(), |hex| u32::from_str_radix(hex, 16))
-        .with_context(|| format!("invalid size: {value}"))
+        .with_context(|| format!("invalid size: {value}"))?;
+    ensure!(size > 0, "certificate size must be greater than zero");
+    Ok(size)
 }
 
 /// Validate and lowercase a 64-character hex SHA-256.
@@ -216,9 +218,6 @@ struct Config {
     identities: std::collections::BTreeMap<u32, GrantIdentity>,
     signs: Vec<Sign>,
     uids: Vec<u32>,
-    /// False when the file predates the authorization list, i.e. the list still
-    /// has to be seeded from whatever the kernel currently honours.
-    uids_present: bool,
 }
 
 /// Pull the authorized appid list out of a parsed config, tolerating the same
@@ -248,7 +247,7 @@ fn parse_uids(value: &serde_json::Value) -> Result<Option<Vec<u32>>> {
             .as_u64()
             .and_then(|value| u32::try_from(value).ok())
             .context("uids must hold appids")?;
-        ensure!(uid < PER_USER_RANGE, "appid out of range: {uid}");
+        ensure!((10_000..PER_USER_RANGE).contains(&uid), "appid out of range: {uid}");
         if !uids.contains(&uid) {
             uids.push(uid);
         }
@@ -291,12 +290,15 @@ fn load_config() -> Result<Config> {
         serde_json::from_str(&content).context("failed to parse dynamic manager config")?;
     let signs = parse_signs(&content)?;
     let uids = parse_uids(&value)?;
-    let identities = value.get("identities").cloned()
-        .map(serde_json::from_value).transpose()?.unwrap_or_default();
+    let identities = value
+        .get("identities")
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()?
+        .unwrap_or_default();
     Ok(Config {
         identities,
         signs,
-        uids_present: true,
         uids: uids.unwrap_or_default(),
     })
 }
@@ -306,7 +308,8 @@ fn save_config(config: &Config) -> Result<()> {
     let parent = path.parent().context("configuration has no parent")?;
     utils::ensure_dir_exists(parent)?;
     let mut file = tempfile::NamedTempFile::new_in(parent)?;
-    file.as_file().set_permissions(Permissions::from_mode(0o600))?;
+    file.as_file()
+        .set_permissions(Permissions::from_mode(0o600))?;
     file.write_all(config_to_json(config).as_bytes())?;
     file.as_file().sync_all()?;
     file.persist(path).map_err(|error| error.error)?;
@@ -401,9 +404,7 @@ where
     let grants = grants_supported()?;
     let mut config = load_config()?;
 
-    // This fork always requires explicit grants, including legacy JSON files.
-    config.uids_present = true;
-    prune_stale_grants(&mut config);
+    prune_stale_grants(&mut config)?;
 
     let previous = config.clone();
     if !mutate(&mut config)? {
@@ -440,7 +441,10 @@ fn commit_config(previous: &Config, next: &Config, grants: bool) -> Result<()> {
         }
     }
 
-    for appid in next.uids.iter().filter(|appid| !previous.uids.contains(appid) || previous.identities.get(appid) != next.identities.get(appid)) {
+    for appid in next.uids.iter().filter(|appid| {
+        !previous.uids.contains(appid)
+            || previous.identities.get(appid) != next.identities.get(appid)
+    }) {
         if let Err(err) = verify_appid_trusted(*appid) {
             if let Err(rollback) = rollback(previous, grants) {
                 warn!("dynamic manager: rollback failed: {rollback:#}");
@@ -556,7 +560,7 @@ fn authorize_appid(config: &mut Config, appid: u32) -> Result<()> {
         }
         config.uids.push(appid);
     }
-    config.uids_present = true;
+
     Ok(())
 }
 
@@ -573,8 +577,15 @@ pub fn grant(uid: u32) -> Result<()> {
     let (package, apk) = apk_from_uid(uid)?;
     let sign = sign_from_apk(&apk, 0)?;
     mutate_config(|config| {
-        config.identities.insert(appid, GrantIdentity { source_uid: uid,
-            package: package.clone(), size: sign.size, hash: sign.hash.clone() });
+        config.identities.insert(
+            appid,
+            GrantIdentity {
+                source_uid: uid,
+                package: package.clone(),
+                size: sign.size,
+                hash: sign.hash.clone(),
+            },
+        );
         authorize_appid(config, appid)?;
         Ok(true)
     })?;
@@ -598,7 +609,7 @@ pub fn ungrant(uid: u32) -> Result<()> {
         if config.uids.len() == before {
             fail!(ErrorCode::ConfigInvalid, "appid {appid} is not authorized");
         }
-        config.uids_present = true;
+
         Ok(true)
     })?;
     println!("revoked appid: {appid}");
@@ -652,7 +663,7 @@ fn version_code_for_package(package: &str) -> u32 {
 }
 
 /// Map a UID to package names using `cmd package` / `pm`.
-fn packages_for_uid(uid: u32) -> Vec<String> {
+fn packages_for_uid(uid: u32) -> Result<Vec<String>> {
     let user = (uid / PER_USER_RANGE).to_string();
     let variants: [(&str, Vec<&str>); 4] = [
         (
@@ -671,13 +682,13 @@ fn packages_for_uid(uid: u32) -> Vec<String> {
             Some(output)
         }
     });
-    let Some(listing) = listing else {
-        return Vec::new();
-    };
-    listing
+    let listing = listing.context("Android package service is unavailable")?;
+    ensure!(listing.lines().any(|line| line.starts_with("package:") && line.contains("uid:")),
+        "Android package service returned an invalid package list");
+    Ok(listing
         .lines()
         .filter_map(|line| package_from_line(line.trim(), uid))
-        .collect()
+        .collect())
 }
 
 fn package_from_line(line: &str, uid: u32) -> Option<String> {
@@ -733,7 +744,7 @@ fn parse_package_paths(output: &str) -> Vec<String> {
 
 /// Find the first installed APK with a usable v2 signature for `uid`.
 fn apk_from_uid(uid: u32) -> Result<(String, String)> {
-    let packages = packages_for_uid(uid);
+    let packages = packages_for_uid(uid)?;
     ensure!(!packages.is_empty(), "no package found for uid {uid}");
     for package in &packages {
         for path in apk_paths_for_package(package, uid) {
@@ -835,8 +846,15 @@ pub fn set_uid(uid: u32) -> Result<()> {
     let appid = uid % PER_USER_RANGE;
     mutate_config(|config| {
         register_sign(config, sign.clone())?;
-        config.identities.insert(appid, GrantIdentity { source_uid: uid,
-            package: package.clone(), size: sign.size, hash: sign.hash.clone() });
+        config.identities.insert(
+            appid,
+            GrantIdentity {
+                source_uid: uid,
+                package: package.clone(),
+                size: sign.size,
+                hash: sign.hash.clone(),
+            },
+        );
         authorize_appid(config, appid)?;
         Ok(true)
     })?;
@@ -901,33 +919,60 @@ pub fn clear() -> Result<()> {
         config.signs.clear();
         config.uids.clear();
         config.identities.clear();
-        config.uids_present = true;
+
         Ok(true)
     })?;
     println!("cleared signatures and authorized appids");
     Ok(())
 }
 
-/// Restore explicit signatures and grants on boot. Never infer grants from a
-/// matching certificate: recognition alone does not authorize a manager.
+/// Restore signatures early without consulting Android PackageManager.
+/// The kernel restores grants bound to package and certificate from its v3 file.
 pub fn load_and_apply() -> Result<()> {
     let _lock = ConfigLock::acquire()?;
+    if !Path::new(defs::DYNAMIC_MANAGER_PATH).exists() {
+        return Ok(());
+    }
+    let config = load_config()?;
+    apply_signs(&config.signs)?;
+    info!("dynamic manager: restored {} signature(s)", config.signs.len());
+    Ok(())
+}
+
+/// Validate persisted identities only after Android's package service is ready.
+pub fn on_boot_completed() -> Result<()> {
+    let _lock = ConfigLock::acquire()?;
+    if !Path::new(defs::DYNAMIC_MANAGER_PATH).exists() {
+        return Ok(());
+    }
     let mut config = load_config()?;
-    prune_stale_grants(&mut config);
+    prune_stale_grants(&mut config)?;
     apply_signs(&config.signs)?;
     apply_grants(&config.uids)?;
+    save_config(&config)?;
     info!("dynamic manager: restored {} signature(s), {} grant(s)",
         config.signs.len(), config.uids.len());
     Ok(())
 }
 
-/// UID reuse or a certificate/package change must require a new user grant.
-fn prune_stale_grants(config: &mut Config) {
-    config.uids.retain(|appid| {
-        let Some(identity) = config.identities.get(appid) else { return false; };
-        let Ok((package, apk)) = apk_from_uid(identity.source_uid) else { return false; };
-        let Ok(sign) = sign_from_apk(&apk, 0) else { return false; };
-        package == identity.package && sign.size == identity.size && sign.hash == identity.hash
-    });
+/// UID reuse or a certificate/package change requires a new user grant.
+/// Service or APK read failures abort without erasing the persisted grants.
+fn prune_stale_grants(config: &mut Config) -> Result<()> {
+    let mut retained = Vec::new();
+    for appid in &config.uids {
+        let Some(identity) = config.identities.get(appid) else { continue; };
+        let packages = packages_for_uid(identity.source_uid)?;
+        if !packages.contains(&identity.package) {
+            continue;
+        }
+        let paths = apk_paths_for_package(&identity.package, identity.source_uid);
+        let apk = paths.first().context("installed package APK path is unavailable")?;
+        let sign = sign_from_apk(apk, 0)?;
+        if sign.size == identity.size && sign.hash == identity.hash {
+            retained.push(*appid);
+        }
+    }
+    config.uids = retained;
     config.identities.retain(|appid, _| config.uids.contains(appid));
+    Ok(())
 }

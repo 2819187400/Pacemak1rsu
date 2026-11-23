@@ -187,6 +187,10 @@ pub fn on_boot_completed() {
     ksucalls::report_boot_complete();
     info!("on_boot_completed triggered!");
 
+    if let Err(error) = crate::dynamic_manager::on_boot_completed() {
+        warn!("validate dynamic managers after boot failed: {error:#}");
+    }
+
     crate::preinit::on_boot_completed();
 
     run_stage("boot-completed", ScriptWait::NoWait);

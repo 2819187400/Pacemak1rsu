@@ -1,7 +1,7 @@
 name: PaceMak1r
 on:
   push:
-    branches: [pacemak1r-manager]
+    branches: [master, pacemak1r-manager]
   workflow_dispatch:
 permissions:
   contents: read

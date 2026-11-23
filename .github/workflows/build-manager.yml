@@ -42,6 +42,7 @@ on:
 
 jobs:
   generate-key:
+    if: github.repository != '2819187400/Pacemak1rsu'
     runs-on: ubuntu-latest
     outputs:
       expected_size: ${{ steps.extract.outputs.expected_size }}
@@ -113,6 +114,7 @@ jobs:
     secrets: inherit
 
   build-ksuinit:
+    if: github.repository != '2819187400/Pacemak1rsu'
     uses: ./.github/workflows/ksuinit.yml
 
   build-ksud:

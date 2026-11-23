@@ -12,6 +12,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -51,6 +52,8 @@ fun DynamicManagersDialog(onDismiss: () -> Unit) {
                         )
                     }.sortedWith(compareByDescending<ManagerCandidate> { it.granted }.thenBy { it.name.lowercase() })
             }
+        } catch (exception: CancellationException) {
+            throw exception
         } catch (exception: Exception) {
             error = exception.message
         } finally {

@@ -32,6 +32,7 @@
  * v2: adds a flags word and the authorized appid list after the version, so a
  *     reboot can never reopen the window in which every trusted signature is
  *     honored without an explicit grant.
+ * v3: binds each grant to the installed package name and signing certificate.
  */
 #define DYNAMIC_MANAGER_FILE_VERSION 3 /* u32 */
 #define DYNAMIC_MANAGER_FILE_FLAG_GRANTS_STRICT (1u << 0)
@@ -89,12 +90,7 @@ static uid_t trusted_dynamic_appids[KSU_DYNAMIC_MANAGER_MAX_APPS];
 static u32 trusted_dynamic_count;
 static DEFINE_RWLOCK(dynamic_snapshot_lock);
 
-/*
- * Authorized appids. Until userspace pushes its list the kernel keeps the
- * historical behaviour (every trusted signature is a manager); the first push
- * switches to the strict rule, and both that fact and the list itself are part
- * of the persisted file above.
- */
+/* Matching certificates are recognized; only explicit identity grants authorize. */
 static bool grants_strict = true;
 
 static u32 sign_key(u32 size, const char *hash)
@@ -296,7 +292,12 @@ bool ksu_is_preset_manager_uid(uid_t uid)
 
 bool ksu_has_dynamic_manager(void)
 {
-    return smp_load_acquire(&trusted_dynamic_count) > 0;
+    bool present;
+
+    read_lock(&dynamic_snapshot_lock);
+    present = trusted_dynamic_count > 0;
+    read_unlock(&dynamic_snapshot_lock);
+    return present;
 }
 
 u32 ksu_dynamic_manager_get_apps(struct ksu_dynamic_manager_app *apps, u32 max_count, u32 *total_count)
@@ -710,10 +711,7 @@ void ksu_dynamic_manager_load(void)
         goto exit;
     }
 
-    /*
-     * v1 carried no authorization list, so a v1 file leaves the kernel in the
-     * legacy permissive mode until userspace pushes its own list.
-     */
+    /* Versions without package/certificate-bound grants were rejected above. */
     if (version >= 2) {
         if (kernel_read(fp, &flags, sizeof(flags), &off) != sizeof(flags) ||
             kernel_read(fp, &grant_count, sizeof(grant_count), &off) != sizeof(grant_count)) {
