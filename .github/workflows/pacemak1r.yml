@@ -154,6 +154,8 @@ jobs:
           path: |
             manager/app/build/reports/
             manager/app/build/outputs/mapping/release/
+            dist/*.txt
+            dist/SHA256SUMS
       - name: Remove temporary signing material
         if: always()
         run: rm -f manager/pace-release.p12
