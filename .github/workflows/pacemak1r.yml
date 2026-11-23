@@ -1,0 +1,162 @@
+name: PaceMak1r
+on:
+  push:
+    branches: [master, pacemak1r-manager]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pacemak1r-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  rust-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Install Rust Android checks
+        run: |
+          rustup update stable
+          rustup component add clippy rustfmt
+          rustup target add aarch64-linux-android
+          cargo install cargo-ndk --locked
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r29
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: userspace/ksud
+      - name: Check, clippy, then format
+        working-directory: userspace/ksud
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+          KSU_PACKAGE_NAME: com.pace.maker
+        run: |
+          cargo ndk -t arm64-v8a check
+          cargo ndk -t arm64-v8a clippy -- -D warnings
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --binary > "$GITHUB_WORKSPACE/rust-format.patch"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: rust-format
+          path: rust-format.patch
+          if-no-files-found: ignore
+  modules:
+    uses: ./.github/workflows/build-lkm.yml
+    with:
+      package_name: com.pace.maker
+  init:
+    uses: ./.github/workflows/ksuinit.yml
+  daemon:
+    needs: [modules, init, rust-checks]
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-linux-android, armv7-linux-androideabi, x86_64-linux-android, riscv64-linux-android]
+    uses: ./.github/workflows/ksud.yml
+    with:
+      target: ${{ matrix.target }}
+      pack_lkm: true
+      pack_ksuinit: true
+  manager:
+    needs: daemon
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: ksud-*
+          path: artifacts
+      - name: Bundle matching daemons before Gradle
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          for target, abi in [('aarch64-linux-android','arm64-v8a'),('armv7-linux-androideabi','armeabi-v7a'),('x86_64-linux-android','x86_64'),('riscv64-linux-android','riscv64')]:
+              source = Path('artifacts') / ('ksud-' + target) / 'ksud'
+              assert source.is_file(), source
+              dest = Path('manager/app/src/main/jniLibs') / abi / 'libksud.so'
+              dest.parent.mkdir(parents=True, exist_ok=True)
+              dest.write_bytes(source.read_bytes())
+              dest.chmod(0o755)
+          PY
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Prepare private release signing
+        env:
+          PACE_SIGNING_JSON: ${{ secrets.PACEMAK1R_SIGNING }}
+        run: |
+          python3 - <<'PY'
+          import os, json, base64, subprocess
+          from pathlib import Path
+          info = json.loads(os.environ['PACE_SIGNING_JSON'])
+          root = Path('manager')
+          key = root / 'pace-release.p12'
+          key.write_bytes(base64.b64decode(info['keystore'], validate=True))
+          key.chmod(0o600)
+          os.environ['PACE_STORE_PASS'] = info['password']
+          cert = Path(os.environ['RUNNER_TEMP']) / 'pace-cert.der'
+          subprocess.run(['keytool','-exportcert','-alias',info['alias'],'-keystore',str(key),'-storepass:env','PACE_STORE_PASS','-file',str(cert)],check=True)
+          assert cert.read_bytes() == (root/'release-certificate.der').read_bytes(), 'Signing certificate does not match the kernel'
+          with (root/'gradle.properties').open('a') as f:
+              f.write('\nKEYSTORE_FILE=pace-release.p12\nKEYSTORE_PASSWORD='+info['password']+'\nKEY_PASSWORD='+info['password']+'\nKEY_ALIAS='+info['alias']+'\n')
+          PY
+      - name: Build release manager and run unit tests
+        working-directory: manager
+        run: ./gradlew -Pandroid.onlyEnableUnitTestForTheTestedBuildType=false assembleRelease testReleaseUnitTest
+      - name: Verify package, label, signature and bundled daemons
+        run: |
+          mkdir -p dist
+          APK=$(find manager/app/build/outputs/apk/release -name '*.apk' -print -quit)
+          test -n "$APK"
+          cp "$APK" dist/PaceMak1r.apk
+          TOOLS="$ANDROID_HOME/build-tools/37.0.0"
+          "$TOOLS/aapt" dump badging dist/PaceMak1r.apk > dist/apk-identity.txt
+          grep -q "package: name='com.pace.maker'" dist/apk-identity.txt
+          grep -q "application-label:'PaceMak1r'" dist/apk-identity.txt
+          "$TOOLS/apksigner" verify --verbose --print-certs dist/PaceMak1r.apk > dist/apk-signature.txt
+          grep -q 'Verified using v2 scheme.*true' dist/apk-signature.txt
+          grep -q 'Verified using v3 scheme.*false' dist/apk-signature.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, zipfile
+          cert_hash = hashlib.sha256(Path('manager/release-certificate.der').read_bytes()).hexdigest()
+          assert cert_hash in Path('dist/apk-signature.txt').read_text()
+          with zipfile.ZipFile('dist/PaceMak1r.apk') as apk:
+              for abi in ['arm64-v8a','armeabi-v7a','x86_64','riscv64']:
+                  data = apk.read(f'lib/{abi}/libksud.so')
+                  expected = Path(f'manager/app/src/main/jniLibs/{abi}/libksud.so').read_bytes()
+                  assert data == expected and data.startswith(b'\x7fELF'), abi
+          import re
+          version_code = re.search(r"versionCode='(\d+)'", Path('dist/apk-identity.txt').read_text()).group(1)
+          output = Path(f'dist/PaceMak1r_{version_code}.apk')
+          Path('dist/PaceMak1r.apk').rename(output)
+          Path('dist/SHA256SUMS').write_text(hashlib.sha256(output.read_bytes()).hexdigest()+'  '+output.name+'\n')
+          PY
+          cat dist/apk-signature.txt >> "$GITHUB_STEP_SUMMARY"
+          cat dist/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: PaceMak1r
+          path: dist/
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: PaceMak1r-build-reports
+          path: |
+            manager/app/build/reports/
+            manager/app/build/outputs/mapping/release/
+            dist/*.txt
+            dist/SHA256SUMS
+      - name: Remove temporary signing material
+        if: always()
+        run: rm -f manager/pace-release.p12
+

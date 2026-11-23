@@ -73,4 +73,9 @@ inline std::pair<int, int> legacy_get_info() {
     return {version, flags};
 }
 
+bool is_dynamic_manager_enabled();
+bool get_dynamic_managers(ksu_dynamic_manager_app *apps, uint32_t capacity, uint32_t *count);
+bool set_dynamic_managers(const ksu_dynamic_manager_sign *signs, uint32_t count);
+bool set_dynamic_manager_grants(const uint32_t *appids, uint32_t count);
+
 #endif //KERNELSU_KSU_H

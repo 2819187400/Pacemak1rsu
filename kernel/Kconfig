@@ -26,6 +26,14 @@ config KSU_DISABLE_MANAGER
 	  Disable manager APK detection and manager-specific handling.
 	  Root will be used in place of manager-only functionality.
 
+config KSU_DYNAMIC_MANAGER
+	bool "Support explicitly authorized dynamic managers"
+	depends on KSU && !KSU_DISABLE_MANAGER
+	default y
+	help
+	  Allow root to register APK certificates and authorize individual appids.
+	  PaceMak1r remains the trusted bootstrap manager.
+
 config KSU_DISABLE_POLICY
 	bool "Disable KernelSU policy profiles"
 	depends on KSU

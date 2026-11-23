@@ -156,6 +156,23 @@ fun SettingPagerMaterial(
                 }
             )
 
+            KsuIsValid {
+                if (me.weishu.kernelsu.Natives.isDynamicManagerEnabled()) {
+                    SegmentedColumn(
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 13.dp),
+                        content = listOf {
+                            SegmentedListItem(
+                                onClick = actions.onOpenDynamicManagers,
+                                headlineContent = { Text(stringResource(R.string.dynamic_managers)) },
+                                supportingContent = { Text(stringResource(R.string.dynamic_managers_summary)) },
+                                leadingContent = { Icon(Icons.Filled.Security, null) },
+                                trailingContent = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) }
+                            )
+                        }
+                    )
+                }
+            }
+
             val profileTemplate = stringResource(id = R.string.settings_profile_template)
             KsuIsValid {
                 SegmentedColumn(

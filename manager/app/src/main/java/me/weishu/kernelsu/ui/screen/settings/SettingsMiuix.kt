@@ -112,6 +112,19 @@ fun SettingPagerMiuix(
                 overscrollEffect = null,
             ) {
                 item {
+                    KsuIsValid {
+                        if (me.weishu.kernelsu.Natives.isDynamicManagerEnabled()) {
+                            Card(modifier = Modifier.padding(top = 12.dp).fillMaxWidth()) {
+                                ArrowPreference(
+                                    title = stringResource(R.string.dynamic_managers),
+                                    summary = stringResource(R.string.dynamic_managers_summary),
+                                    onClick = actions.onOpenDynamicManagers
+                                )
+                            }
+                        }
+                    }
+                }
+                item {
                     Card(
                         modifier = Modifier
                             .padding(top = 12.dp)

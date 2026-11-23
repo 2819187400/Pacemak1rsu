@@ -394,4 +394,14 @@
     <string name="script_param_below_min">Must be at least %d</string>
     <string name="script_param_above_max">Must be at most %d</string>
     <string name="script_param_invalid">Invalid value</string>
+    <string name="dynamic_managers">Dynamic managers</string>
+    <string name="dynamic_managers_summary">Authorize trusted apps to manage root. Each grant applies to the entire shared UID across Android users.</string>
+    <string name="dynamic_search">Search apps or packages</string>
+    <string name="dynamic_close">Close</string>
+    <string name="dynamic_confirm">Confirm</string>
+    <string name="dynamic_cancel">Cancel</string>
+    <string name="dynamic_authorize">Authorize manager</string>
+    <string name="dynamic_revoke">Revoke manager</string>
+    <string name="dynamic_authorize_message">Allow %1$s (%2$s) to manage root access and modules? Only authorize apps you trust completely.</string>
+    <string name="dynamic_revoke_message">Revoke manager access for %1$s (%2$s)? Restart the app after changing access.</string>
 </resources>

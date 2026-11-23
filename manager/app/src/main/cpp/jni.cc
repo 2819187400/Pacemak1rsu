@@ -439,3 +439,62 @@ Java_me_weishu_kernelsu_magica_AppZygotePreload_forkDontCareAndExecKsud(JNIEnv *
     env->ReleaseStringUTFChars(ksud_path, path);
     env->ReleaseStringUTFChars(pkg_name, pkg);
 }
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_me_weishu_kernelsu_Natives_isDynamicManagerEnabled(JNIEnv *, jobject) {
+    return is_dynamic_manager_enabled();
+}
+
+extern "C" JNIEXPORT jintArray JNICALL
+Java_me_weishu_kernelsu_Natives_getDynamicManagers(JNIEnv *env, jobject) {
+    ksu_dynamic_manager_app apps[KSU_DYNAMIC_MANAGER_MAX_APPS] = {};
+    uint32_t count = 0;
+    if (!get_dynamic_managers(apps, KSU_DYNAMIC_MANAGER_MAX_APPS, &count)) return nullptr;
+    jint data[KSU_DYNAMIC_MANAGER_MAX_APPS * 2] = {};
+    for (uint32_t i = 0; i < count; ++i) {
+        data[i * 2] = apps[i].appid;
+        data[i * 2 + 1] = apps[i].flags;
+    }
+    auto result = env->NewIntArray(count * 2);
+    if (result) env->SetIntArrayRegion(result, 0, count * 2, data);
+    return result;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_me_weishu_kernelsu_Natives_setDynamicManagerGrants(JNIEnv *env, jobject, jintArray ids) {
+    if (!ids) return false;
+    auto count = env->GetArrayLength(ids);
+    if (count > KSU_DYNAMIC_MANAGER_MAX_APPS) return false;
+    jint appids[KSU_DYNAMIC_MANAGER_MAX_APPS] = {};
+    env->GetIntArrayRegion(ids, 0, count, appids);
+    if (env->ExceptionCheck()) return false;
+    for (int i = 0; i < count; ++i)
+        if (appids[i] < 10000 || appids[i] >= 100000) return false;
+    return set_dynamic_manager_grants(reinterpret_cast<uint32_t *>(appids), count);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_me_weishu_kernelsu_Natives_setDynamicManagerSignatures(JNIEnv *env, jobject,
+                                                          jintArray sizes, jobjectArray hashes) {
+    if (!sizes || !hashes) return false;
+    auto count = env->GetArrayLength(sizes);
+    if (count > KSU_DYNAMIC_MANAGER_MAX_SIGNS || env->GetArrayLength(hashes) != count) return false;
+    jint lengths[KSU_DYNAMIC_MANAGER_MAX_SIGNS] = {};
+    ksu_dynamic_manager_sign signs[KSU_DYNAMIC_MANAGER_MAX_SIGNS] = {};
+    env->GetIntArrayRegion(sizes, 0, count, lengths);
+    if (env->ExceptionCheck()) return false;
+    for (int i = 0; i < count; ++i) {
+        auto hash = static_cast<jstring>(env->GetObjectArrayElement(hashes, i));
+        if (!hash || lengths[i] <= 0 || env->GetStringUTFLength(hash) != 64) {
+            if (hash) env->DeleteLocalRef(hash);
+            return false;
+        }
+        auto value = env->GetStringUTFChars(hash, nullptr);
+        if (!value) { env->DeleteLocalRef(hash); return false; }
+        signs[i].size = lengths[i];
+        memcpy(signs[i].hash, value, 64);
+        env->ReleaseStringUTFChars(hash, value);
+        env->DeleteLocalRef(hash);
+    }
+    return set_dynamic_managers(signs, count);
+}

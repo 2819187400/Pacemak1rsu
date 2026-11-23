@@ -113,6 +113,9 @@ android {
             useLegacyPackaging = true
         }
         jniLibs {
+            // ksud is an executable carrying embedded kernel/init assets. Keep
+            // the verified Rust output intact when packaging it as a .so.
+            keepDebugSymbols += "**/libksud.so"
             useLegacyPackaging = true
             excludes += "lib/*/libandroidx.graphics.path.so"
         }

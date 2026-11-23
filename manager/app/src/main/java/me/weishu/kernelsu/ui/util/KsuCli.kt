@@ -122,6 +122,19 @@ fun execKsud(args: String, newShell: Boolean = false, globalMnt: Boolean = false
     }
 }
 
+suspend fun updateDynamicManager(uid: Int, grant: Boolean): Result<Unit> = withContext(Dispatchers.IO) {
+    runCatching {
+        require(uid >= 10000 && uid % 100000 >= 10000) { "Invalid application UID" }
+        val command = if (grant) "set-uid" else "ungrant"
+        val result = getRootShell().newJob()
+            .add("${getKsuDaemonPath().shellQuote()} dynamic $command $uid")
+            .to(ArrayList<String>(), ArrayList<String>()).exec()
+        check(result.isSuccess) {
+            result.err.joinToString("\n").ifBlank { "Dynamic manager command failed (${result.code})" }
+        }
+    }
+}
+
 suspend fun getFeatureStatus(feature: String): String = withContext(Dispatchers.IO) {
     val shell = getRootShell()
     val out = shell.newJob()

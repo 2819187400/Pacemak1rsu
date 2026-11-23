@@ -11,6 +11,7 @@
 #include "runtime/ksud.h"
 #include "manager/manager_observer.h"
 #include "manager/throne_tracker.h"
+#include "manager/dynamic_manager.h"
 
 bool ksu_module_mounted __read_mostly = false;
 bool ksu_boot_completed __read_mostly = false;
@@ -28,6 +29,9 @@ void on_post_fs_data(void)
     pr_info("on_post_fs_data!\n");
 
     ksu_load_allow_list();
+#ifdef CONFIG_KSU_DYNAMIC_MANAGER
+    ksu_dynamic_manager_load();
+#endif
     ksu_observer_init();
     // Sanity check for safe mode only needs early-boot input samples.
     ksu_stop_input_hook_runtime();

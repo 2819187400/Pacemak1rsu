@@ -265,3 +265,32 @@ bool is_selinux_hide_enabled() {
     }
     return value != 0;
 }
+
+bool is_dynamic_manager_enabled() {
+    uint64_t value = 0;
+    bool supported = false;
+    return get_feature(KSU_FEATURE_DYNAMIC_MANAGER, &value, &supported) && supported && value &&
+        get_feature(KSU_FEATURE_DYNAMIC_MANAGER_GRANTS, &value, &supported) && supported && value;
+}
+
+bool get_dynamic_managers(ksu_dynamic_manager_app *apps, uint32_t capacity, uint32_t *count) {
+    ksu_get_dynamic_managers_cmd cmd = {capacity, 0, reinterpret_cast<uint64_t>(apps)};
+    if (ksuctl(KSU_IOCTL_GET_DYNAMIC_MANAGERS, &cmd) != 0 || cmd.count > capacity)
+        return false;
+    *count = cmd.count;
+    return true;
+}
+
+bool set_dynamic_managers(const ksu_dynamic_manager_sign *signs, uint32_t count) {
+    if (count > KSU_DYNAMIC_MANAGER_MAX_SIGNS) return false;
+    ksu_dynamic_manager_cmd cmd = {count, reinterpret_cast<uint64_t>(signs)};
+    return ksuctl(KSU_IOCTL_SET_DYNAMIC_MANAGERS, &cmd) == 0;
+}
+
+bool set_dynamic_manager_grants(const uint32_t *appids, uint32_t count) {
+    if (count > KSU_DYNAMIC_MANAGER_MAX_APPS) return false;
+    ksu_dynamic_manager_grants_cmd cmd = {count, 0, reinterpret_cast<uint64_t>(appids)};
+    return ksuctl(KSU_IOCTL_SET_DYNAMIC_MANAGER_GRANTS, &cmd) == 0;
+}
+
+static_assert(KSU_IOCTL_SET_DYNAMIC_MANAGERS != KSU_IOCTL_LOOKUP_SYMBOLS);

@@ -385,4 +385,14 @@
     <string name="script_param_below_min">不能小于 %d</string>
     <string name="script_param_above_max">不能大于 %d</string>
     <string name="script_param_invalid">无效的值</string>
+    <string name="dynamic_managers">动态管理器</string>
+    <string name="dynamic_managers_summary">授权受信任应用管理 Root。授权对共享同一 UID 的应用及所有 Android 用户生效。</string>
+    <string name="dynamic_search">搜索应用或包名</string>
+    <string name="dynamic_close">关闭</string>
+    <string name="dynamic_confirm">确认</string>
+    <string name="dynamic_cancel">取消</string>
+    <string name="dynamic_authorize">授权管理器</string>
+    <string name="dynamic_revoke">撤销管理器</string>
+    <string name="dynamic_authorize_message">允许 %1$s（%2$s）管理 Root 权限和模块？请仅授权你完全信任的应用。</string>
+    <string name="dynamic_revoke_message">撤销 %1$s（%2$s）的管理权限？更改权限后请重新启动该应用。</string>
 </resources>
