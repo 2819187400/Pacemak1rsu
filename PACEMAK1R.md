@@ -8,7 +8,7 @@ compatible with the upstream implementation.
 
 Run the PaceMak1r Actions workflow on master or pacemak1r-manager. It builds
 kernel modules, init and all four Android ksud targets before assembling the
-manager. The PaceMak1r artifact contains PaceMak1r.apk, identity/signature
+manager. The PaceMak1r artifact contains PaceMak1r_<versionCode>.apk, identity/signature
 reports and SHA256SUMS. The inherited Build Manager workflow is skipped in
 this fork; use PaceMak1r for consistently signed builds.
 
@@ -17,6 +17,10 @@ keystore (base64 PKCS12), password and alias. The public release certificate is
 manager/release-certificate.der. Kernel defaults and release signing must use
 that same certificate. Keep the private keystore backed up outside Git history;
 changing it prevents ordinary APK upgrades and requires rebuilding the kernel.
+
+The in-app update checker reads releases from this repository only. To publish
+an update later, attach the versioned APK from the Actions artifact to a GitHub
+release; its filename supplies the Android version code to the update checker.
 
 ## Dynamic managers
 

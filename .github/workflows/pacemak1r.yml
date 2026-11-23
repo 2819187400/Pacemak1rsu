@@ -135,7 +135,11 @@ jobs:
                   data = apk.read(f'lib/{abi}/libksud.so')
                   expected = Path(f'manager/app/src/main/jniLibs/{abi}/libksud.so').read_bytes()
                   assert data == expected and data.startswith(b'\x7fELF'), abi
-          Path('dist/SHA256SUMS').write_text(hashlib.sha256(Path('dist/PaceMak1r.apk').read_bytes()).hexdigest()+'  PaceMak1r.apk\n')
+          import re
+          version_code = re.search(r"versionCode='(\d+)'", Path('dist/apk-identity.txt').read_text()).group(1)
+          output = Path(f'dist/PaceMak1r_{version_code}.apk')
+          Path('dist/PaceMak1r.apk').rename(output)
+          Path('dist/SHA256SUMS').write_text(hashlib.sha256(output.read_bytes()).hexdigest()+'  '+output.name+'\n')
           PY
           cat dist/apk-signature.txt >> "$GITHUB_STEP_SUMMARY"
           cat dist/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
