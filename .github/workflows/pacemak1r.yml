@@ -37,6 +37,7 @@ jobs:
           cargo ndk -t arm64-v8a check
           cargo ndk -t arm64-v8a clippy -- -D warnings
           cargo fmt --all
+          cargo fmt --all -- --check
           git diff --binary > "$GITHUB_WORKSPACE/rust-format.patch"
       - uses: actions/upload-artifact@v7
         if: always()
@@ -110,7 +111,7 @@ jobs:
           PY
       - name: Build release manager and run unit tests
         working-directory: manager
-        run: ./gradlew assembleRelease testReleaseUnitTest
+        run: ./gradlew -Pandroid.onlyEnableUnitTestForTheTestedBuildType=false assembleRelease testReleaseUnitTest
       - name: Verify package, label, signature and bundled daemons
         run: |
           mkdir -p dist
@@ -123,6 +124,7 @@ jobs:
           grep -q "application-label:'PaceMak1r'" dist/apk-identity.txt
           "$TOOLS/apksigner" verify --verbose --print-certs dist/PaceMak1r.apk > dist/apk-signature.txt
           grep -q 'Verified using v2 scheme.*true' dist/apk-signature.txt
+          grep -q 'Verified using v3 scheme.*false' dist/apk-signature.txt
           python3 - <<'PY'
           from pathlib import Path
           import hashlib, zipfile

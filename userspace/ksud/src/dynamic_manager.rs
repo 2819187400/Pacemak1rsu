@@ -247,7 +247,10 @@ fn parse_uids(value: &serde_json::Value) -> Result<Option<Vec<u32>>> {
             .as_u64()
             .and_then(|value| u32::try_from(value).ok())
             .context("uids must hold appids")?;
-        ensure!((10_000..PER_USER_RANGE).contains(&uid), "appid out of range: {uid}");
+        ensure!(
+            (10_000..PER_USER_RANGE).contains(&uid),
+            "appid out of range: {uid}"
+        );
         if !uids.contains(&uid) {
             uids.push(uid);
         }
@@ -683,8 +686,12 @@ fn packages_for_uid(uid: u32) -> Result<Vec<String>> {
         }
     });
     let listing = listing.context("Android package service is unavailable")?;
-    ensure!(listing.lines().any(|line| line.starts_with("package:") && line.contains("uid:")),
-        "Android package service returned an invalid package list");
+    ensure!(
+        listing
+            .lines()
+            .any(|line| line.starts_with("package:") && line.contains("uid:")),
+        "Android package service returned an invalid package list"
+    );
     Ok(listing
         .lines()
         .filter_map(|line| package_from_line(line.trim(), uid))
@@ -935,7 +942,10 @@ pub fn load_and_apply() -> Result<()> {
     }
     let config = load_config()?;
     apply_signs(&config.signs)?;
-    info!("dynamic manager: restored {} signature(s)", config.signs.len());
+    info!(
+        "dynamic manager: restored {} signature(s)",
+        config.signs.len()
+    );
     Ok(())
 }
 
@@ -950,8 +960,11 @@ pub fn on_boot_completed() -> Result<()> {
     apply_signs(&config.signs)?;
     apply_grants(&config.uids)?;
     save_config(&config)?;
-    info!("dynamic manager: restored {} signature(s), {} grant(s)",
-        config.signs.len(), config.uids.len());
+    info!(
+        "dynamic manager: restored {} signature(s), {} grant(s)",
+        config.signs.len(),
+        config.uids.len()
+    );
     Ok(())
 }
 
@@ -960,19 +973,25 @@ pub fn on_boot_completed() -> Result<()> {
 fn prune_stale_grants(config: &mut Config) -> Result<()> {
     let mut retained = Vec::new();
     for appid in &config.uids {
-        let Some(identity) = config.identities.get(appid) else { continue; };
+        let Some(identity) = config.identities.get(appid) else {
+            continue;
+        };
         let packages = packages_for_uid(identity.source_uid)?;
         if !packages.contains(&identity.package) {
             continue;
         }
         let paths = apk_paths_for_package(&identity.package, identity.source_uid);
-        let apk = paths.first().context("installed package APK path is unavailable")?;
+        let apk = paths
+            .first()
+            .context("installed package APK path is unavailable")?;
         let sign = sign_from_apk(apk, 0)?;
         if sign.size == identity.size && sign.hash == identity.hash {
             retained.push(*appid);
         }
     }
     config.uids = retained;
-    config.identities.retain(|appid, _| config.uids.contains(appid));
+    config
+        .identities
+        .retain(|appid, _| config.uids.contains(appid));
     Ok(())
 }

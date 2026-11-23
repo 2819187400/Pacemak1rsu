@@ -1,3 +1,11 @@
+# External builds have no KernelSU Kconfig entry; enable dynamic managers by
+# default while keeping an explicit CONFIG_KSU_DYNAMIC_MANAGER=n effective.
+ifdef KBUILD_EXTMOD
+ifeq ($(CONFIG_KSU_DYNAMIC_MANAGER),)
+CONFIG_KSU_DYNAMIC_MANAGER := y
+endif
+endif
+
 kernelsu-objs := core/init.o
 
 kernelsu-objs += feature/kernel_umount.o
@@ -31,7 +39,7 @@ ifneq ($(CONFIG_KSU_DISABLE_MANAGER),y)
 kernelsu-objs += manager/apk_sign.o
 kernelsu-objs += manager/pkg_observer.o
 kernelsu-objs += manager/throne_tracker.o
-ifneq ($(CONFIG_KSU_DYNAMIC_MANAGER),n)
+ifeq ($(CONFIG_KSU_DYNAMIC_MANAGER),y)
 kernelsu-objs += manager/dynamic_manager.o
 endif
 endif
@@ -62,7 +70,7 @@ kernelsu-objs += feature/selinux_hide.o
 kernelsu-objs += feature/shell_su_adb_only.o
 
 ifdef KBUILD_EXTMOD
-ifneq ($(CONFIG_KSU_DYNAMIC_MANAGER),n)
+ifeq ($(CONFIG_KSU_DYNAMIC_MANAGER),y)
 ifneq ($(CONFIG_KSU_DISABLE_MANAGER),y)
 ccflags-y += -DCONFIG_KSU_DYNAMIC_MANAGER=1
 endif

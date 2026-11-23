@@ -32,9 +32,9 @@ void ksu_dynamic_manager_note_scanned(uid_t appid, const char *package, const st
 int ksu_dynamic_manager_set(const struct ksu_dynamic_manager_sign *signs, u32 count, bool *need_rescan);
 
 /*
- * Replace the authorized appid list. Until the first call the kernel keeps the
- * legacy rule (every trusted signature is a manager); afterwards only
- * authorized appids are published, and the list plus that fact are persisted.
+ * Replace the explicitly authorized appid list, binding each grant to the
+ * currently scanned package and certificate. Matching a certificate alone
+ * never authorizes a dynamic manager.
  */
 int ksu_dynamic_manager_set_grants(const uid_t *appids, u32 count);
 
