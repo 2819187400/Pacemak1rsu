@@ -16,6 +16,10 @@ pub fn on_post_fs_data() -> Result<()> {
 
     ksucalls::report_post_fs_data();
 
+    if let Err(error) = crate::dynamic_manager::load_and_apply() {
+        warn!("restore dynamic managers failed: {error:#}");
+    }
+
     utils::umask(0);
 
     // Clear all temporary module configs early

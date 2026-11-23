@@ -12,6 +12,7 @@
 
 #include "policy/allowlist.h"
 #include "manager/apk_sign.h"
+#include "manager/dynamic_manager.h"
 #include "klog.h" // IWYU pragma: keep
 #include "manager/manager_identity.h"
 #include "manager/throne_tracker.h"
@@ -22,7 +23,6 @@ uid_t ksu_manager_appid = KSU_INVALID_APPID;
 
 #define DATA_PATH_LEN 384 // 384 is enough for /data/app/<package>/base.apk
 
-static char cached_manager_apk_path[DATA_PATH_LEN];
 
 #define SYSTEM_PACKAGES_LIST_PATH "/data/system/packages.list"
 
@@ -71,19 +71,6 @@ struct my_dir_context {
 #define FILLDIR_ACTOR_STOP -EINVAL
 #endif
 
-static bool maybe_manager_apk_dir(const char *path)
-{
-    _Static_assert(sizeof(KSU_PACKAGE_NAME) < KSU_MAX_PACKAGE_NAME, "KSU_PACKAGE_NAME too long!");
-    char pkg[KSU_MAX_PACKAGE_NAME];
-    if (get_pkg_from_apk_dir_path(pkg, path) < 0) {
-        pr_err("Failed to get package name from apk dir path: %s\n", path);
-        return false;
-    }
-
-    // pkg is `<real package>`
-    return strncmp(pkg, KSU_PACKAGE_NAME, sizeof(KSU_PACKAGE_NAME)) == 0;
-}
-
 static FILLDIR_RETURN_TYPE my_actor(struct dir_context *ctx, const char *name, int namelen, loff_t off, u64 ino,
                                     unsigned int d_type)
 {
@@ -124,10 +111,7 @@ static FILLDIR_RETURN_TYPE my_actor(struct dir_context *ctx, const char *name, i
 
     // now put this on candidate_path
     if (d_type == DT_REG && namelen == 8 && !memcmp(name, "base.apk", 8)) {
-        if (maybe_manager_apk_dir(my_ctx->parent_dir)) {
-            snprintf(candidate_path, DATA_PATH_LEN, "%s/%.*s", my_ctx->parent_dir, namelen, name);
-            strcpy(cached_manager_apk_path, candidate_path);
-        }
+        snprintf(candidate_path, DATA_PATH_LEN, "%s/%.*s", my_ctx->parent_dir, namelen, name);
         // As soon as we met the base.apk, we can stop
         return FILLDIR_ACTOR_STOP;
     }
@@ -137,7 +121,7 @@ static FILLDIR_RETURN_TYPE my_actor(struct dir_context *ctx, const char *name, i
 
 static void search_manager(const char *path, int depth, struct list_head *uid_data)
 {
-    int i, stop = 0;
+    int i;
     struct list_head data_path_list;
     INIT_LIST_HEAD(&data_path_list);
     unsigned long data_app_magic = 0;
@@ -156,8 +140,7 @@ static void search_manager(const char *path, int depth, struct list_head *uid_da
         struct data_path *pos, *n;
 
         list_for_each_entry_safe (pos, n, &data_path_list, list) {
-            if (stop)
-                goto skip_iterate;
+            candidate_path[0] = 0;
             struct my_dir_context ctx = { .ctx.actor = my_actor,
                                           .data_path_list = &data_path_list,
                                           .parent_dir = pos->dirpath,
@@ -193,17 +176,25 @@ static void search_manager(const char *path, int depth, struct list_head *uid_da
             if (!candidate_path[0])
                 goto skip_iterate;
 
-            // As soon as we get the manager apk path, we can stop
-            stop = 1;
-
-            bool is_manager = is_manager_apk(candidate_path);
-            pr_info("Found manager base.apk at path: %s, is_manager: %d\n", candidate_path, is_manager);
-
-            // Only crown if signature verification pass
-            if (unlikely(!is_manager))
-                goto skip_iterate;
-
-            crown_manager(candidate_path, uid_data);
+            struct apk_sign_match match = { .index = -1 };
+            if (match_apk_signature(candidate_path, &match)) {
+                char pkg[KSU_MAX_PACKAGE_NAME];
+                if (get_pkg_from_apk_path(pkg, candidate_path) < 0)
+                    goto skip_iterate;
+                if (match.index == 0 && match.trusted && !strcmp(pkg, KSU_PACKAGE_NAME)) {
+                    crown_manager(candidate_path, uid_data);
+                } else {
+#ifdef CONFIG_KSU_DYNAMIC_MANAGER
+                    struct uid_data *app;
+                    list_for_each_entry (app, uid_data, list) {
+                        if (!strcmp(app->package, pkg)) {
+                            ksu_dynamic_manager_note_scanned(app->uid, pkg, &match);
+                            break;
+                        }
+                    }
+#endif
+                }
+            }
 
         skip_iterate:
             list_del(&pos->list);
@@ -228,6 +219,41 @@ static bool is_uid_exist(uid_t uid, char *package, void *data)
     return exist;
 }
 
+static int read_package_uid(struct file *fp, loff_t line_start, loff_t line_end, struct list_head *uid_list)
+{
+    /* Keep the complete package and u32 UID, but ignore optional trailing fields. */
+    char buf[KSU_MAX_PACKAGE_NAME + 12];
+    size_t len = min_t(loff_t, line_end - line_start, sizeof(buf) - 1);
+    ssize_t count = kernel_read(fp, buf, len, &line_start);
+    struct uid_data *data;
+    char *tmp, *package, *uid;
+    u32 res;
+
+    if (count < 0)
+        return count;
+    if ((size_t)count != len || !len || memchr(buf, '\0', len))
+        return -EINVAL;
+    buf[len] = '\0';
+
+    tmp = buf;
+    package = strsep(&tmp, " \t\r");
+    while (tmp && (*tmp == ' ' || *tmp == '\t'))
+        tmp++;
+    uid = strsep(&tmp, " \t\r");
+    /* A truncated prefix must contain the delimiter after the complete UID. */
+    if (!package || !*package || strlen(package) >= KSU_MAX_PACKAGE_NAME || !uid || !*uid ||
+        (!tmp && line_start < line_end) || kstrtou32(uid, 10, &res))
+        return -EINVAL;
+
+    data = kzalloc(sizeof(*data), GFP_KERNEL);
+    if (!data)
+        return -ENOMEM;
+    data->uid = res;
+    strscpy(data->package, package, sizeof(data->package));
+    list_add_tail(&data->list, uid_list);
+    return 0;
+}
+
 void track_throne(bool prune_only)
 {
     mutex_lock(&throne_tracker_mutex);
@@ -244,49 +270,41 @@ void track_throne(bool prune_only)
     char chr = 0;
     loff_t pos = 0;
     loff_t line_start = 0;
-    char buf[KSU_MAX_PACKAGE_NAME];
+    bool parse_ok = true;
     for (;;) {
         ssize_t count = kernel_read(fp, &chr, sizeof(chr), &pos);
-        if (count != sizeof(chr))
-            break;
-        if (chr != '\n')
+        if (count < 0) {
+            parse_ok = false;
+            break; // read error: the list is incomplete
+        }
+        if (count == 0 && pos == line_start)
+            break; // normal EOF
+        if (count > 0 && chr != '\n')
             continue;
 
-        count = kernel_read(fp, buf, sizeof(buf) - 1, &line_start);
-        if (count <= 0) {
+        /* Do not read into the next record, including for two-field shared UIDs. */
+        int rc = read_package_uid(fp, line_start, count > 0 ? pos - 1 : pos, &uid_list);
+        if (rc) {
+            pr_err("update_uid: invalid package record at offset %lld: %d\n", (long long)line_start, rc);
+            parse_ok = false;
             break;
         }
-        buf[count] = '\0';
-
-        struct uid_data *data = kzalloc(sizeof(struct uid_data), GFP_KERNEL);
-        if (!data) {
-            filp_close(fp, 0);
-            goto out;
-        }
-
-        char *tmp = buf;
-        const char *delim = " ";
-        char *package = strsep(&tmp, delim);
-        char *uid = strsep(&tmp, delim);
-        if (!uid || !package) {
-            kfree(data);
-            pr_err("update_uid: package or uid is NULL!\n");
-            break;
-        }
-
-        u32 res;
-        if (kstrtou32(uid, 10, &res)) {
-            kfree(data);
-            pr_err("update_uid: uid parse err\n");
-            break;
-        }
-        data->uid = res;
-        strscpy(data->package, package, sizeof(data->package));
-        list_add_tail(&data->list, &uid_list);
-        // reset line start
         line_start = pos;
+        if (count == 0)
+            break; // the final record need not end with a newline
     }
     filp_close(fp, 0);
+
+    /*
+     * A truncated parse (allocation or format error) yields an incomplete uid
+     * list. Acting on it could revoke the fixed manager by mistake and prune
+     * allowlist entries for apps that simply were not parsed yet, so bail out
+     * and leave the previous state untouched.
+     */
+    if (!parse_ok) {
+        pr_warn("%s: incomplete packages list, skipping manager check and prune\n", __func__);
+        goto out;
+    }
 
     // now update uid list
     struct uid_data *np;
@@ -295,56 +313,15 @@ void track_throne(bool prune_only)
     if (prune_only)
         goto prune;
 
-    // first, check if manager_uid exist!
-    uid_t manager_package_uid = KSU_INVALID_APPID;
-    bool need_rescan = false;
-    list_for_each_entry (np, &uid_list, list) {
-        if (strcmp(np->package, KSU_PACKAGE_NAME) == 0) {
-            manager_package_uid = np->uid;
-            break;
-        }
-    }
-
-    if (manager_package_uid == KSU_INVALID_APPID) {
-        cached_manager_apk_path[0] = 0;
-        if (ksu_is_manager_appid_valid()) {
-            pr_info("manager is uninstalled, invalidate it!\n");
-            ksu_invalidate_manager_uid();
-            goto prune;
-        }
-    } else {
-        if (!ksu_is_manager_appid_valid()) {
-            need_rescan = true;
-        } else if (unlikely(np->uid != ksu_get_manager_appid())) {
-            // this should not happen in normal android system
-            pr_info("manager uid changed, invalidate it!\n");
-            cached_manager_apk_path[0] = 0;
-            ksu_invalidate_manager_uid();
-            need_rescan = true;
-        } else {
-            // uid unchanged, skip
-            pr_info("manager uid unchanged, skip search!\n");
-        }
-    }
-
-    if (need_rescan) {
-        // If the apk path still exists, the verification result won't be changed
-        if (cached_manager_apk_path[0]) {
-            struct path p;
-            int ret = kern_path(cached_manager_apk_path, 0, &p);
-            if (ret == 0) {
-                // skip search
-                pr_info("manager apk path unchanged, skip search!\n");
-                path_put(&p);
-                goto prune;
-            } else if (ret != -ENOENT) {
-                pr_err("stat cached manager path failed: %d (path=%s)\n", ret, cached_manager_apk_path);
-            }
-        }
-        pr_info("Searching manager " KSU_PACKAGE_NAME "...\n");
-        search_manager("/data/app", 2, &uid_list);
-        pr_info("Search manager finished\n");
-    }
+    // Every package update can change a dynamic manager's signature or UID.
+    ksu_invalidate_manager_uid();
+#ifdef CONFIG_KSU_DYNAMIC_MANAGER
+    ksu_dynamic_manager_begin_scan();
+#endif
+    search_manager("/data/app", 2, &uid_list);
+#ifdef CONFIG_KSU_DYNAMIC_MANAGER
+    ksu_dynamic_manager_end_scan();
+#endif
 
 prune:
     // then prune the allowlist
@@ -368,4 +345,9 @@ void __init ksu_throne_tracker_init()
 void __exit ksu_throne_tracker_exit()
 {
     // nothing to do
+}
+
+void track_throne_force(void)
+{
+    track_throne(false);
 }

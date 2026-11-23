@@ -29,6 +29,7 @@ fun SettingPager(
     bottomInnerPadding: Dp,
     isCurrentPage: Boolean = true,
 ) {
+    var showDynamicManagers by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
     val viewModel = viewModel<SettingsViewModel>()
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -78,8 +79,13 @@ fun SettingPager(
                 .putExtra("name", name)
             )
         },
+        onOpenDynamicManagers = { showDynamicManagers = true },
         onOpenAbout = { navigator.push(Route.About) },
     )
+
+    if (showDynamicManagers) {
+        DynamicManagersDialog(onDismiss = { showDynamicManagers = false })
+    }
 
     when (LocalUiMode.current) {
         UiMode.Miuix -> SettingPagerMiuix(uiState, actions, bottomInnerPadding)

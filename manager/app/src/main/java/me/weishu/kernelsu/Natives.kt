@@ -59,6 +59,12 @@ object Natives {
     val isPrBuild: Boolean
         external get
 
+    const val DYNAMIC_MANAGER_GRANTED = 4
+    external fun isDynamicManagerEnabled(): Boolean
+    external fun getDynamicManagers(): IntArray?
+    external fun setDynamicManagerSignatures(sizes: IntArray, hashes: Array<String>): Boolean
+    external fun setDynamicManagerGrants(appids: IntArray): Boolean
+
     external fun uidShouldUmount(uid: Int): Boolean
 
     /**
